@@ -794,6 +794,7 @@ public:
     }
 };
 
+/*
 int main(){
     Image<_8U> img;
     img.read("sample_images/img1.jpeg", READ_COLOR);
@@ -804,3 +805,4 @@ int main(){
     img.write(img.getBlurImg(), "output_images/blurimg1.jpeg");
     return 0;
 }
+*/
