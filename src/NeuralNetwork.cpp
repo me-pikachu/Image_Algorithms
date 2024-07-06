@@ -14,7 +14,8 @@ class NeuralNetwork {
 public:
     enum ActivationFunc{
         sigmoidFunc,
-        reluFunc
+        reluFunc,
+        hyperbolicTangentFunc
     };
 
 private:
@@ -119,11 +120,21 @@ public:
         else return 1;
     }
 
+    double hyperbolicTangent(double z){
+        return tanh(z);
+    }
+
+    double hyerbolicTangentDerivative(double z){
+        return 1/(cosh(z)*cosh(z));
+    }
+
     double activationFunc(double z){
         if (actFunc == NeuralNetwork::sigmoidFunc){
             return sigmoid(z);
         } else if (actFunc == NeuralNetwork::reluFunc){
             return relu(z);
+        } else if (actFunc == NeuralNetwork::hyperbolicTangentFunc){
+            return hyperbolicTangent(z); 
         } else {
             std::cerr << "Invalid activation function" << std::endl;
             return 0;
@@ -135,6 +146,8 @@ public:
             return sigmoidDerivative(z);
         } else if (actFunc == NeuralNetwork::reluFunc){
             return reluDerivative(z);
+        } else if (actFunc == NeuralNetwork::hyperbolicTangentFunc){
+            return hyerbolicTangentDerivative(z);
         } else {
             std::cerr << "Invalid activation function" << std::endl;
             return 0;
@@ -217,7 +230,7 @@ public:
         return outputVector;
     }
 
-    matrix<double> getUpdatedParameters(const std::vector<matrix<double>>& layerVals, const matrix<double>& gradient, const int& cur, const int& _size, const int& beta){
+    matrix<double> getUpdatedParameters(const std::vector<matrix<double>>& layerVals, const matrix<double>& gradient, const int& cur, const int& _size, const double& beta){
         // updates momentum and RMSProp and returns the new gradient
         double zero = 0.0;
         matrix<double> newGradient(_size+1, width+1, zero);
@@ -249,7 +262,7 @@ public:
         return newGradient;
     }
 
-    void backpropagate(const std::vector<std::vector<inDtype>>& inputVectors, const std::vector<std::vector<outDtype>>& outputVectors, const double& LearningRate, const double& beta){
+    void backpropagate(const std::vector<std::vector<inDtype>>& inputVectors, const std::vector<std::vector<outDtype>>& outputVectors, const double& LearningRate, const double& beta, const double& lambda, const double& epsilon){
         // updates the weights based upon the outputVectors
         if (inputVectors.size() != outputVectors.size()){
             std::cerr << "The Input Vector batch size is not equal to Output Vector batch size" << std::endl;
@@ -280,7 +293,7 @@ public:
         #pragma omp parallel for schedule(dynamic)
         for (int k=0; k<_size; ++k){
             for (int i=0; i<width+1; ++i){
-                gradient[_size][i] += gradient[k][i] / _size;
+                gradient[_size][i] += gradient[k][i] / (_size * outSize);
             }
         }
 
@@ -296,8 +309,7 @@ public:
         for (int i=0; i<outSize; ++i){
             for (int j=0; j<width+1; ++j){
                 // using both momentum and RMSProp approach
-                if (RMSProp[depth][j] == 0) weights[depth][i][j] -= LearningRate * momentum[depth][j] / 0.001;
-                else weights[depth][i][j] -= LearningRate * momentum[depth][j] / sqrt(RMSProp[depth][j]);
+                weights[depth][i][j] -= (LearningRate * momentum[depth][j] / sqrt(RMSProp[depth][j] + epsilon) + LearningRate * lambda * weights[depth][i][j]);
             }
         }
 
@@ -308,14 +320,13 @@ public:
             #pragma omp parallel for schedule(dynamic)
             for (int i=0; i<width+1; ++i){
                 for (int j=0; j<width+1; ++j){
-                    if (RMSProp[k][j] == 0) weights[k][i][j] -= LearningRate * momentum[k][j] / 0.001;
-                    else weights[k][i][j] -= LearningRate * momentum[k][j] / sqrt(RMSProp[k][j]);
+                    weights[k][i][j] -= (LearningRate * momentum[k][j] / sqrt(RMSProp[k][j] + epsilon) + LearningRate * lambda * weights[k][i][j]);
                 }
             }
         }
     }
 
-    void train(const std::vector<std::vector<inDtype>>& inVectors, const std::vector<std::vector<outDtype>>& outVectors, const int& epoch, const double& batchSize, const double& LearningRate, const double& momentumParameter){
+    void train(const std::vector<std::vector<inDtype>>& inVectors, const std::vector<std::vector<outDtype>>& outVectors, const int& epoch, const double& batchSize, const double& LearningRate, const double& momentumParameter, const double& lambda, const double& epsilon){
         // train the neural network in batches
         if (inVectors.size() != outVectors.size() || inVectors.size() == 0 || outVectors.size() == 0){
             std::cerr << "Incomplete or Invalid trainning data" << std::endl;
@@ -344,7 +355,7 @@ public:
         for (int i=0; i<epoch; ++i){
             for (int j=0; j<totalBatches; ++j){
                 //std::cout << "Batch: " << j << std::endl;
-                backpropagate(inBatches[j], outBatches[j], LearningRate, momentumParameter);
+                backpropagate(inBatches[j], outBatches[j], LearningRate, momentumParameter, lambda, epsilon);
             }
 
             // our current Epoch completed
@@ -377,18 +388,18 @@ int main(){
     std::mt19937 random(rd());
     std::uniform_real_distribution<> dis(-100, 100);
 
-    NeuralNetwork<double, double> nn(1, 1, 10, 5, NeuralNetwork<double, double>::sigmoidFunc);
+    NeuralNetwork<double, double> nn(1, 1, 10, 5, NeuralNetwork<double, double>::hyperbolicTangentFunc);
     std::vector<std::vector<double>> inputvector;
     std::vector<std::vector<double>> outputvector;
     for (int i=0; i<10000; ++i){
         std::vector<double> in; std::vector<double> out;
         double num = dis(random);
         in.push_back(num);
-        sin(num) >= 0 ? out.push_back(sin(num)) : out.push_back(-sin(num));
+        out.push_back(sin(num));
         inputvector.push_back(in);
         outputvector.push_back(out);
     }
-    nn.train(inputvector, outputvector, 1000, 0.1, 0.01, 0.1);
+    nn.train(inputvector, outputvector, 100, 0.1, 0.01, 0.1, 0, 0.00001);
 
     while (true){
         double x;
@@ -399,4 +410,3 @@ int main(){
 
     return 0;
 }
-
