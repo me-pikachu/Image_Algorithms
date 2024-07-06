@@ -4,7 +4,7 @@
 template <typename dtype> struct matrix{
     // the matrix is considered to be small
     // so we would use single pointer
-    int rows, cols;
+    int rows = 0, cols = 0;
     dtype* mat = nullptr;
 
     matrix(){
@@ -38,7 +38,7 @@ template <typename dtype> struct matrix{
         }
     }
 
-    matrix(matrix& other){
+    matrix(const matrix& other){
         // in case of copying the object how to perform the copy
         // it is the copy constructor
         this->rows = other.rows;
@@ -53,7 +53,10 @@ template <typename dtype> struct matrix{
         std::memcpy(this->mat, other.mat, other.rows*other.cols*sizeof(dtype)); // memcpy would be faster
     }
 
-    matrix(matrix&& other) noexcept : rows(other.rows), cols(other.cols), mat(other.mat) {
+    matrix(matrix&& other){
+        this->rows = other.rows;
+        this->cols = other.cols;
+        this->mat = other.mat;
         other.rows = 0;
         other.cols = 0;
         other.mat = nullptr;
@@ -61,6 +64,9 @@ template <typename dtype> struct matrix{
 
     ~matrix(){
         free(mat);
+        this->rows = 0;
+        this->cols = 0;
+        this->mat = nullptr;
     }
 
     void resize(int r, int c, const dtype& value){
@@ -147,17 +153,19 @@ template <typename dtype> struct matrix{
         return *this;
     }
 
-    matrix& operator=(matrix&& other) noexcept {
-        if (this == &other) return *this;
+    matrix& operator=(matrix&& matB){
+        if (this == &matB){
+            return *this;
+        }
 
-        free(this->mat);
-        this->rows = other.rows;
-        this->cols = other.cols;
-        this->mat = other.mat;
-
-        other.rows = 0;
-        other.cols = 0;
-        other.mat = nullptr;
+        if (this->rows != matB.rows || this->cols != matB.cols){
+            // free currently assigned memory
+            free(this->mat);
+            this->mat = (dtype*)malloc(matB.rows * matB.cols * sizeof(dtype));
+            this->rows = matB.rows;
+            this->cols = matB.cols;
+        }
+        memcpy(this->mat, matB.mat, this->rows*this->cols*sizeof(dtype));
         return *this;
     }
 

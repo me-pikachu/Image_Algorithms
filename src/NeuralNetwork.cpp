@@ -7,16 +7,23 @@
 #include <random>
 
 
-template <typename inDtype, typename outDtype>
+template <typename inDtype = double, typename outDtype = double>
 // inDtype means the data type for the input values
 // outDtype means the data type for output values
 class NeuralNetwork {
+public:
+    enum ActivationFunc{
+        sigmoidFunc,
+        reluFunc
+    };
+
 private:
     int inSize = 0;
     int outSize = 0;
     int depth = 0; // no of hidden layers
     int width = 0; // no of neurons in a hidden layer
     // all the hidden layer has same no of neurons
+    ActivationFunc actFunc;
     
     std::vector<matrix<double>> weights; // weigth[k][i][j] represents ...
     // ... the (k-1)th hidden layer's jth neuron to (k)th hidden layer's ith neuron
@@ -26,7 +33,7 @@ private:
     std::vector<matrix<double>> RMSProp;
     
 public:
-    NeuralNetwork(const int& inputSize, const int& outputSize, const int& hiddenDepth, const int& hiddenWidth, const double& minWeightVal = -1.0, const double& maxWeightVal = 1.0){
+    NeuralNetwork(const int& inputSize, const int& outputSize, const int& hiddenDepth, const int& hiddenWidth,  ActivationFunc actiFunc = NeuralNetwork::sigmoidFunc, const double& minWeightVal = -1.0, const double& maxWeightVal = 1.0){
         // depth represent number of hidden layer
         // width represent number of neurons in each hidden layer
         if (inputSize == 0 || outputSize == 0){
@@ -48,6 +55,7 @@ public:
         this->outSize = outputSize;
         this->depth = hiddenDepth;
         this->width = hiddenWidth;
+        this->actFunc = actiFunc;
 
         std::random_device rd;
         std::mt19937 random(rd());
@@ -58,7 +66,7 @@ public:
         weights = std::vector(depth+1, matrix<double>(width+1, width+1));
         momentum = std::vector(depth+1, matrix<double>(width+1, width+1, zero));
         RMSProp = std::vector(depth+1, matrix<double>(width+1, width+1, zero));
-
+        
         // now initialising with random weights
         #pragma omp parallel for schedule(dynamic)
         for (int k=0; k<depth+1; ++k){
@@ -82,6 +90,10 @@ public:
                 weights[depth][i][j] = 0;
             }
         }
+    }
+
+    double absolute(double z){
+        return z >= 0 ? z : -z;
     }
 
     double sigmoid(double z){
@@ -108,55 +120,25 @@ public:
     }
 
     double activationFunc(double z){
-        return sigmoid(z);
+        if (actFunc == NeuralNetwork::sigmoidFunc){
+            return sigmoid(z);
+        } else if (actFunc == NeuralNetwork::reluFunc){
+            return relu(z);
+        } else {
+            std::cerr << "Invalid activation function" << std::endl;
+            return 0;
+        }
     }
 
     double activationFuncDerivate(double z){
-        return sigmoidDerivative(z);
-    }
-
-    matrix<double> feedForwardValues(const std::vector<inDtype>& inputVector){
-        // it returns all the values in the Neural Network including the hidden values
-
-        if (inputVector.size() != inSize){
-            std::cerr << "Input size is not matching" << std::endl;
+        if (actFunc == NeuralNetwork::sigmoidFunc){
+            return sigmoidDerivative(z);
+        } else if (actFunc == NeuralNetwork::reluFunc){
+            return reluDerivative(z);
+        } else {
+            std::cerr << "Invalid activation function" << std::endl;
+            return 0;
         }
-
-        double zero = 0.0;
-        matrix<double> layerVal(depth+2, width+1, zero); // these are the values before appyling the activation function
-
-        // feeding the input values in layerVal
-        for (int i=0; i<inSize; ++i){
-            layerVal[0][i] = inputVector[i];
-        }
-        layerVal[0][inSize] = 1; // for the bias value
-
-
-        for (int k=1; k<depth+2; ++k){
-            #pragma omp parallel for schedule(dynamic)
-            for (int i=0; i<width; ++i){
-                for (int j=0; j<width+1; ++i){
-                    layerVal[k][i] += activationFunc(layerVal[k-1][j]) * weights[k-1][i][j];
-                }
-            }
-            layerVal[k][width] = 1; // for the bias value
-        }
-
-        layerVal[depth+1][width] = 0;
-
-        return layerVal;
-    }
-
-    std::vector<double> feedForward(const std::vector<inDtype>& inputVector){
-        // returns the outputVector based upon the current Neural Network
-        auto layerVal = feedForwardValues(inputVector);
-
-        std::vector<double> outputVector(outSize, 0);
-        for (int i=0; i<outSize; ++i){
-            outputVector[i] = sigmoid(layerVal[depth+1][i]);
-        }
-
-        return outputVector;
     }
 
     double RMSError(const std::vector<inDtype>& inputVector, const std::vector<outDtype>& outputVector){
@@ -174,8 +156,8 @@ public:
         std::vector<double> curOutputVector = feedForward(inputVector);
         double error = 0;
         for (int i=0; i<outSize; ++i){
-            if (outputVector[i] == 0) error += abs(curOutputVector[i] - outputVector[i]) * 100 / outSize;
-            else error += abs(curOutputVector[i] - outputVector[i]) * 100 / (outSize * outputVector[i]);
+            if (outputVector[i] == 0) error += absolute(curOutputVector[i] - outputVector[i]) * 100 / outSize;
+            else error += absolute(curOutputVector[i] - outputVector[i]) * 100 / (outSize * outputVector[i]);
         }
         return error; // returns error out of 100 percent
     }
@@ -185,9 +167,54 @@ public:
         std::vector<double> curOutputVector = feedForward(inputVector);
         double error = 0;
         for (int i=0; i<outSize; ++i){
-            error += abs(curOutputVector[i] - outputVector[i]) / outSize;
+            error += absolute(curOutputVector[i] - outputVector[i]) / outSize;
         }
         return sqrt(error);
+    }
+
+    matrix<double> feedForwardValues(const std::vector<inDtype>& inputVector){
+        // it returns all the values in the Neural Network including the hidden values
+        double zero = 0.0;
+        matrix<double> layerVal(depth+2, width+1, zero); // these are the values before appyling the activation function
+
+        if (inputVector.size() != inSize){
+            std::cerr << "Input size is not matching" << std::endl;
+            return matrix<double>(0, 0);
+        }
+
+        // feeding the input values in layerVal
+        for (int i=0; i<inSize; ++i){
+            layerVal[0][i] = inputVector[i];
+        }
+        layerVal[0][inSize] = 1; // for the bias value
+
+
+        for (int k=1; k<depth+2; ++k){
+            #pragma omp parallel for schedule(dynamic)
+            for (int i=0; i<width; ++i){
+                for (int j=0; j<width+1; ++j){
+                    layerVal[k][i] += activationFunc(layerVal[k-1][j]) * weights[k-1][i][j];
+                }
+            }
+            layerVal[k][width] = 1; // for the bias value
+        }
+
+        layerVal[depth+1][width] = 0;
+        return layerVal;
+    }
+
+    std::vector<double> feedForward(const std::vector<inDtype>& inputVector){
+        // returns the outputVector based upon the current Neural Network
+        matrix<double> layerVal;
+        //std::cout << layerVal.rows << layerVal.cols << std::endl;
+        layerVal = feedForwardValues(inputVector);
+
+        std::vector<double> outputVector(outSize, 0);
+        for (int i=0; i<outSize; ++i){
+            outputVector[i] = activationFunc(layerVal[depth+1][i]);
+        }
+
+        return outputVector;
     }
 
     std::vector<matrix<double>> getUpdatedParameters(const std::vector<matrix<double>>& layerVals, const std::vector<matrix<double>>& gradient, const int& cur, const int& _size, const int& beta){
@@ -203,7 +230,7 @@ public:
                     for (int l=0; l<width+1; ++l){
                         newGradient[k][i][j] += gradient[k][l][width] * weights[cur+1][l][i];
                     }
-                    newGradient[k][i][j] *= sigmoidDerivative(layerVals[k][cur+1][i]) * layerVals[k][cur][j];
+                    newGradient[k][i][j] *= activationFuncDerivate(layerVals[k][cur+1][i]) * layerVals[k][cur][j];
                     newGradient[_size][i][j] += newGradient[k][i][j];
                 }
             }
@@ -229,7 +256,7 @@ public:
         }
 
         const size_t _size = inputVectors.size(); // this _size is the batch size
-        std::vector<matrix<double>> layerVals(_size, matrix<double>(depth+2, width+1));
+        std::vector<matrix<double>> layerVals(_size);
 
         #pragma omp parallel for schedule(dynamic)
         for (int k=0; k<_size; ++k){
@@ -264,7 +291,8 @@ public:
         for (int i=0; i<outSize; ++i){
             for (int j=0; j<width+1; ++j){
                 // using both momentum and RMSProp approach
-                weights[depth][i][j] -= LearningRate * momentum[depth][i][j] / sqrt(RMSProp[depth][i][j]);
+                if (RMSProp[depth][i][j] == 0) weights[depth][i][j] -= LearningRate * momentum[depth][i][j] / 0.001;
+                else weights[depth][i][j] -= LearningRate * momentum[depth][i][j] / sqrt(RMSProp[depth][i][j]);
             }
         }
 
@@ -274,7 +302,8 @@ public:
             #pragma omp parallel for schedule(dynamic)
             for (int i=0; i<width+1; ++i){
                 for (int j=0; j<width+1; ++j){
-                    weights[k][i][j] -= LearningRate * momentum[k][i][j] / sqrt(RMSProp[k][i][j]);
+                    if (RMSProp[k][i][j] == 0) weights[k][i][j] -= LearningRate * momentum[k][i][j] / 0.001;
+                    else weights[k][i][j] -= LearningRate * momentum[k][i][j] / sqrt(RMSProp[k][i][j]);
                 }
             }
         }
@@ -318,43 +347,50 @@ public:
                 error += MAPError(inVectors[j], outVectors[j]) / trainingSize;
             }
             std::cout << "Mean Absolute Percentage Error: " << error << std::endl;
-            
+            std::cout << inVectors[0][0] << " " << outVectors[0][0] << " " << feedForward(inVectors[0])[0] << std::endl;
         }
     }
 
 };
 
-int main(){
-    /*
-    NeuralNetwork<double, double> nn(3, 1, 10, 20);
-    std::cout << nn.feedForward({-1, -1, -1})[0] << std::endl;
-    nn.train({{-1, -1, -1}, {0, 0, 0}, {5, 5, 5}, {2.5, 2.5, 2.5}, {3, 1, -1}, {2, -1, 0}, {0, 0, 0.1}, {-1, 0, 1}}, {{1}, {1}, {1}, {1}, {0}, {0}, {0}, {0}}, 10000, 0.001);
-    std::cout << nn.feedForward({-1, -1, -1})[0] << std::endl;
-    while (1){
-        double x, y, z;
-        std::cin >> x >> y >> z;
-        std::cout << nn.feedForward({x, y, z})[0] << std::endl;
-    }
-    */
 
-    std::random_device rd;
-    std::mt19937 random(rd());
-    std::uniform_real_distribution<> dis(-100, 100);
+// int main(){
+//     /*
+//     NeuralNetwork<double, double> nn(3, 1, 10, 20);
+//     std::cout << nn.feedForward({-1, -1, -1})[0] << std::endl;
+//     nn.train({{-1, -1, -1}, {0, 0, 0}, {5, 5, 5}, {2.5, 2.5, 2.5}, {3, 1, -1}, {2, -1, 0}, {0, 0, 0.1}, {-1, 0, 1}}, {{1}, {1}, {1}, {1}, {0}, {0}, {0}, {0}}, 10000, 0.001);
+//     std::cout << nn.feedForward({-1, -1, -1})[0] << std::endl;
+//     while (1){
+//         double x, y, z;
+//         std::cin >> x >> y >> z;
+//         std::cout << nn.feedForward({x, y, z})[0] << std::endl;
+//     }
+//     */
 
-    NeuralNetwork<double, double> nn(1, 1, 20, 20);
-    std::vector<std::vector<double>> inputvector;
-    std::vector<std::vector<double>> outputvector;
-    for (int i=0; i<1000; ++i){
-        std::vector<double> in; std::vector<double> out;
-        double num = dis(random);
-        in.push_back(num);
-        out.push_back(sin(num));
-        inputvector.push_back(in);
-        outputvector.push_back(out);
-    }
+//     std::random_device rd;
+//     std::mt19937 random(rd());
+//     std::uniform_real_distribution<> dis(-100, 100);
 
-    nn.train(inputvector, outputvector, 1000, 0.1, 0.01, 0.9);
+//     NeuralNetwork<double, double> nn(1, 1, 10, 5, NeuralNetwork<double, double>::reluFunc);
+//     std::vector<std::vector<double>> inputvector;
+//     std::vector<std::vector<double>> outputvector;
+//     for (int i=0; i<10000; ++i){
+//         std::vector<double> in; std::vector<double> out;
+//         double num = dis(random);
+//         in.push_back(num);
+//         sin(num) >= 0 ? out.push_back(sin(num)) : out.push_back(-sin(num));
+//         inputvector.push_back(in);
+//         outputvector.push_back(out);
+//     }
+//     nn.train(inputvector, outputvector, 100, 0.1, 0.01, 0.1);
 
+//     while (true){
+//         double x;
+//         std::cin >> x;
+//         std::cout << "The actual value: " << nn.absolute(sin(x)) << std::endl;
+//         std::cout << "Neural Network's prediction is: " << nn.feedForward({x})[0] << std::endl;
+//     }
 
-    return 0;
-}
+//     return 0;
+// }
+
