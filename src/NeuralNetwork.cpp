@@ -29,8 +29,8 @@ private:
     // ... the (k-1)th hidden layer's jth neuron to (k)th hidden layer's ith neuron
 
     // for optimisers
-    std::vector<matrix<double>> momentum;
-    std::vector<matrix<double>> RMSProp;
+    matrix<double> momentum;
+    matrix<double> RMSProp;
     
 public:
     NeuralNetwork(const int& inputSize, const int& outputSize, const int& hiddenDepth, const int& hiddenWidth,  ActivationFunc actiFunc = NeuralNetwork::sigmoidFunc, const double& minWeightVal = -1.0, const double& maxWeightVal = 1.0){
@@ -64,8 +64,8 @@ public:
         // assigning the required space
         double zero = 0.0;
         weights = std::vector(depth+1, matrix<double>(width+1, width+1));
-        momentum = std::vector(depth+1, matrix<double>(width+1, width+1, zero));
-        RMSProp = std::vector(depth+1, matrix<double>(width+1, width+1, zero));
+        momentum = matrix<double>(depth+1, width+1, zero);
+        RMSProp = matrix<double>(depth+1, width+1, zero);
         
         // now initialising with random weights
         #pragma omp parallel for schedule(dynamic)
@@ -217,32 +217,33 @@ public:
         return outputVector;
     }
 
-    std::vector<matrix<double>> getUpdatedParameters(const std::vector<matrix<double>>& layerVals, const std::vector<matrix<double>>& gradient, const int& cur, const int& _size, const int& beta){
+    matrix<double> getUpdatedParameters(const std::vector<matrix<double>>& layerVals, const matrix<double>& gradient, const int& cur, const int& _size, const int& beta){
         // updates momentum and RMSProp and returns the new gradient
         double zero = 0.0;
-        std::vector<matrix<double>> newGradient(_size+1, matrix<double>(width+1, width+1, zero));
+        matrix<double> newGradient(_size+1, width+1, zero);
 
         #pragma omp parallel for schedule(dynamic)
         for (int k=0; k<_size; ++k){
-            #pragma omp parallel for schedule(dynamic)
             for (int i=0; i<width+1; ++i){
                 for (int j=0; j<width+1; ++j){
-                    for (int l=0; l<width+1; ++l){
-                        newGradient[k][i][j] += gradient[k][l][width] * weights[cur+1][l][i];
-                    }
-                    newGradient[k][i][j] *= activationFuncDerivate(layerVals[k][cur+1][i]) * layerVals[k][cur][j];
-                    newGradient[_size][i][j] += newGradient[k][i][j];
+                    newGradient[k][j] += gradient[k][i] * weights[cur][i][j];
                 }
             }
         }
 
         #pragma omp parallel for schedule(dynamic)
-        for (int i=0; i<width+1; ++i){
-            for (int j=0; j<width+1; ++j){
-                double grad = newGradient[_size][i][j];
-                momentum[cur][i][j] = beta * momentum[cur][i][j] + (1 - beta) * grad; // updating the momentum
-                RMSProp[cur][i][j] = beta * RMSProp[cur][i][j] + (1 - beta) * grad * grad; // updating the RMSprop
+        for (int k=0; k<_size; ++k){
+            for (int i=0; i<width+1; ++i){
+                newGradient[k][i] *= activationFuncDerivate(layerVals[k][cur][i]);
+                newGradient[_size][i] += newGradient[k][i] / _size;
             }
+        }
+
+        #pragma omp parallel for schedule(dynamic)
+        for (int i=0; i<width+1; ++i){
+            double grad = newGradient[_size][i];
+            momentum[cur][i] = beta * momentum[cur][i] + (1 - beta) * grad; // updating the momentum
+            RMSProp[cur][i] = beta * RMSProp[cur][i] + (1 - beta) * grad * grad; // updating the RMSprop
         }        
 
         return newGradient;
@@ -264,26 +265,30 @@ public:
         }
 
         double zero = 0.0;
-        std::vector<matrix<double>> gradient(_size+1, matrix<double>(width+1, width+1, zero));
+        matrix<double> gradient(_size+1, width+1, zero);
 
         // calculating the gradient for the output layer
         #pragma omp parallel for schedule(dynamic)
         for (int k=0; k<_size; ++k){
-            for (int i=0; i<outSize; ++i){
+            for (int i=0; i<width+1; ++i){
                 for (int j=0; j<width+1; ++j){
-                    gradient[k][i][j] = 2 * (activationFunc(layerVals[k][depth+1][i]) - outputVectors[k][i]) * activationFuncDerivate(layerVals[k][depth+1][i]) * layerVals[k][depth][j] / (outSize* _size); // initialising the gradient
-                    gradient[_size][i][j] += gradient[k][i][j];
+                    gradient[k][i] += 2 * (activationFunc(layerVals[k][depth+1][j]) - outputVectors[k][j]) * activationFuncDerivate(layerVals[k][depth+1][j]) * activationFunc(layerVals[k][depth][i]);
                 }
             }
         }
 
         #pragma omp parallel for schedule(dynamic)
-        for (int i=0; i<outSize; ++i){
-            for (int j=0; j<width+1; ++j){
-                double grad = gradient[_size][i][j];
-                momentum[depth][i][j] = beta * momentum[depth][i][j] + (1 - beta) * grad; // updating the momentum
-                RMSProp[depth][i][j] = beta * RMSProp[depth][i][j] + (1 - beta) * grad * grad; // updating the RMSProp
+        for (int k=0; k<_size; ++k){
+            for (int i=0; i<width+1; ++i){
+                gradient[_size][i] += gradient[k][i] / _size;
             }
+        }
+
+        #pragma omp parallel for schedule(dynamic)
+        for (int i=0; i<outSize; ++i){
+            double grad = gradient[_size][i];
+            momentum[depth][i] = beta * momentum[depth][i] + (1 - beta) * grad; // updating the momentum
+            RMSProp[depth][i] = beta * RMSProp[depth][i] + (1 - beta) * grad * grad; // updating the RMSProp
         }        
 
         // updating the output weights
@@ -291,19 +296,20 @@ public:
         for (int i=0; i<outSize; ++i){
             for (int j=0; j<width+1; ++j){
                 // using both momentum and RMSProp approach
-                if (RMSProp[depth][i][j] == 0) weights[depth][i][j] -= LearningRate * momentum[depth][i][j] / 0.001;
-                else weights[depth][i][j] -= LearningRate * momentum[depth][i][j] / sqrt(RMSProp[depth][i][j]);
+                if (RMSProp[depth][j] == 0) weights[depth][i][j] -= LearningRate * momentum[depth][j] / 0.001;
+                else weights[depth][i][j] -= LearningRate * momentum[depth][j] / sqrt(RMSProp[depth][j]);
             }
         }
 
         // for the rest of the layers
         for (int k=depth-1; k>=0; --k){
+            //std::cout << "Hidden Layer " << depth-k << std::endl; 
             gradient = getUpdatedParameters(layerVals, gradient, k, _size, beta);
             #pragma omp parallel for schedule(dynamic)
             for (int i=0; i<width+1; ++i){
                 for (int j=0; j<width+1; ++j){
-                    if (RMSProp[k][i][j] == 0) weights[k][i][j] -= LearningRate * momentum[k][i][j] / 0.001;
-                    else weights[k][i][j] -= LearningRate * momentum[k][i][j] / sqrt(RMSProp[k][i][j]);
+                    if (RMSProp[k][j] == 0) weights[k][i][j] -= LearningRate * momentum[k][j] / 0.001;
+                    else weights[k][i][j] -= LearningRate * momentum[k][j] / sqrt(RMSProp[k][j]);
                 }
             }
         }
@@ -337,6 +343,7 @@ public:
 
         for (int i=0; i<epoch; ++i){
             for (int j=0; j<totalBatches; ++j){
+                //std::cout << "Batch: " << j << std::endl;
                 backpropagate(inBatches[j], outBatches[j], LearningRate, momentumParameter);
             }
 
@@ -347,50 +354,49 @@ public:
                 error += MAPError(inVectors[j], outVectors[j]) / trainingSize;
             }
             std::cout << "Mean Absolute Percentage Error: " << error << std::endl;
-            std::cout << inVectors[0][0] << " " << outVectors[0][0] << " " << feedForward(inVectors[0])[0] << std::endl;
         }
     }
 
 };
 
 
-// int main(){
-//     /*
-//     NeuralNetwork<double, double> nn(3, 1, 10, 20);
-//     std::cout << nn.feedForward({-1, -1, -1})[0] << std::endl;
-//     nn.train({{-1, -1, -1}, {0, 0, 0}, {5, 5, 5}, {2.5, 2.5, 2.5}, {3, 1, -1}, {2, -1, 0}, {0, 0, 0.1}, {-1, 0, 1}}, {{1}, {1}, {1}, {1}, {0}, {0}, {0}, {0}}, 10000, 0.001);
-//     std::cout << nn.feedForward({-1, -1, -1})[0] << std::endl;
-//     while (1){
-//         double x, y, z;
-//         std::cin >> x >> y >> z;
-//         std::cout << nn.feedForward({x, y, z})[0] << std::endl;
-//     }
-//     */
+int main(){
+    /*
+    NeuralNetwork<double, double> nn(3, 1, 10, 20);
+    std::cout << nn.feedForward({-1, -1, -1})[0] << std::endl;
+    nn.train({{-1, -1, -1}, {0, 0, 0}, {5, 5, 5}, {2.5, 2.5, 2.5}, {3, 1, -1}, {2, -1, 0}, {0, 0, 0.1}, {-1, 0, 1}}, {{1}, {1}, {1}, {1}, {0}, {0}, {0}, {0}}, 10000, 0.001);
+    std::cout << nn.feedForward({-1, -1, -1})[0] << std::endl;
+    while (1){
+        double x, y, z;
+        std::cin >> x >> y >> z;
+        std::cout << nn.feedForward({x, y, z})[0] << std::endl;
+    }
+    */
 
-//     std::random_device rd;
-//     std::mt19937 random(rd());
-//     std::uniform_real_distribution<> dis(-100, 100);
+    std::random_device rd;
+    std::mt19937 random(rd());
+    std::uniform_real_distribution<> dis(-100, 100);
 
-//     NeuralNetwork<double, double> nn(1, 1, 10, 5, NeuralNetwork<double, double>::reluFunc);
-//     std::vector<std::vector<double>> inputvector;
-//     std::vector<std::vector<double>> outputvector;
-//     for (int i=0; i<10000; ++i){
-//         std::vector<double> in; std::vector<double> out;
-//         double num = dis(random);
-//         in.push_back(num);
-//         sin(num) >= 0 ? out.push_back(sin(num)) : out.push_back(-sin(num));
-//         inputvector.push_back(in);
-//         outputvector.push_back(out);
-//     }
-//     nn.train(inputvector, outputvector, 100, 0.1, 0.01, 0.1);
+    NeuralNetwork<double, double> nn(1, 1, 10, 5, NeuralNetwork<double, double>::sigmoidFunc);
+    std::vector<std::vector<double>> inputvector;
+    std::vector<std::vector<double>> outputvector;
+    for (int i=0; i<10000; ++i){
+        std::vector<double> in; std::vector<double> out;
+        double num = dis(random);
+        in.push_back(num);
+        sin(num) >= 0 ? out.push_back(sin(num)) : out.push_back(-sin(num));
+        inputvector.push_back(in);
+        outputvector.push_back(out);
+    }
+    nn.train(inputvector, outputvector, 1000, 0.1, 0.01, 0.1);
 
-//     while (true){
-//         double x;
-//         std::cin >> x;
-//         std::cout << "The actual value: " << nn.absolute(sin(x)) << std::endl;
-//         std::cout << "Neural Network's prediction is: " << nn.feedForward({x})[0] << std::endl;
-//     }
+    while (true){
+        double x;
+        std::cin >> x;
+        std::cout << "The actual value: " << nn.absolute(sin(x)) << std::endl;
+        std::cout << "Neural Network's prediction is: " << nn.feedForward({x})[0] << std::endl;
+    }
 
-//     return 0;
-// }
+    return 0;
+}
 

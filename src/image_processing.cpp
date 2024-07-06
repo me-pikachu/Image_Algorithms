@@ -104,5 +104,22 @@ std::vector<uchar> MNISTreadLabel(const std::string& file_path){
 int main(){
     auto train_images = MNISTreadImg("mnist_data/train_images/train-images.idx3-ubyte");
     auto train_labels = MNISTreadLabel("mnist_data/train_labels/train-labels.idx1-ubyte");
+
+    size_t _size = 10;
+    int rows = train_images[0].rows;
+    int cols = train_images[0].cols;
+    std::vector<std::vector<double>> input(_size);
+    std::vector<std::vector<double>> output(_size);
+    for (int i=0; i<_size; ++i){
+        for (int r=0; r<rows; ++r){
+            for (int c=0; c<cols; ++c){
+                input[i].push_back(train_images[i][r][c][0]);
+            }
+        }
+        output[i].push_back(train_labels[i]);
+    }
+
+    NeuralNetwork<double, double> nn(rows*cols, 1, 20, train_images[0].rows*cols, NeuralNetwork<double, double>::reluFunc);
+    nn.train(input, output, 1000, 0.1, 0.01, 0.9);
     return 0;
 }
